@@ -29,7 +29,10 @@ fn test_auto_installation() {
     if !is_dll_available() {
         match install_dll() {
             Ok(()) => {
-                assert!(is_dll_available(), "DLL should be available after installation");
+                assert!(
+                    is_dll_available(),
+                    "DLL should be available after installation"
+                );
                 verify_dll().expect("DLL should be verifiable after installation");
             }
             Err(e) => println!("Installation failed (might be expected): {:?}", e),
@@ -40,7 +43,7 @@ fn test_auto_installation() {
 #[test]
 fn test_error_handling() {
     // Test with invalid numbers (if your Go function has bounds checking)
-    match add_numbers(std::i32::MAX, 1) {
+    match add_numbers(i32::MAX, 1) {
         Ok(_) => println!("Operation succeeded (might be expected)"),
         Err(e) => println!("Expected error occurred: {:?}", e),
     }
