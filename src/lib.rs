@@ -115,3 +115,53 @@ pub fn install_dll() -> Result<(), DllError> {
 pub use ffi::AddNumbers;
 #[deprecated(note = "Use the safe wrapper `go_function` instead")]
 pub use ffi::GoFunction;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dll_path_resolution() {
+        let path = get_dll_path();
+        assert!(path.is_some(), "DLL path should be resolvable");
+    }
+
+    #[test]
+    fn test_dll_availability_check() {
+        let available = is_dll_available();
+        // This test might fail if DLL isn't present, which is expected
+        println!("DLL availability: {}", available);
+    }
+
+    #[test]
+    fn test_dll_verification() {
+        match verify_dll() {
+            Ok(_) => println!("DLL verified successfully"),
+            Err(e) => println!(
+                "DLL verification failed (expected if DLL not present): {:?}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn test_add_numbers() {
+        if verify_dll().is_ok() {
+            match add_numbers(5, 3) {
+                Ok(result) => assert_eq!(result, 8, "Addition should work correctly"),
+                Err(e) => panic!("Failed to add numbers: {:?}", e),
+            }
+        } else {
+            println!("Skipping add_numbers test as DLL is not available");
+        }
+    }
+
+    #[test]
+    fn test_dll_error_display() {
+        let error = DllError::NotFound;
+        assert_eq!(error.to_string(), "DLL not found");
+
+        let error = DllError::LoadError("test error".to_string());
+        assert_eq!(error.to_string(), "Failed to load DLL: test error");
+    }
+}

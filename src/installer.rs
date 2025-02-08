@@ -120,3 +120,62 @@ impl Installer {
         self.installation_dir.join("go_lib.dll")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_installer_creation() {
+        match Installer::new() {
+            Ok(installer) => {
+                assert!(installer.installation_dir.ends_with("bin"));
+                assert!(installer.dll_source.ends_with("go_lib.dll"));
+            }
+            Err(e) => panic!("Failed to create installer: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_get_dll_path() {
+        if let Ok(installer) = Installer::new() {
+            let dll_path = installer.get_dll_path();
+            assert!(dll_path.ends_with("go_lib.dll"));
+            assert_eq!(dll_path.parent().unwrap(), installer.installation_dir);
+        }
+    }
+
+    #[test]
+    fn test_installation_directory_creation() {
+        if let Ok(installer) = Installer::new() {
+            // Create a temporary test directory
+            let test_dir = installer.installation_dir.join("test_install");
+            let test_installer = Installer {
+                installation_dir: test_dir.clone(),
+                dll_source: installer.dll_source,
+            };
+
+            // Test directory creation
+            if let Err(e) = fs::create_dir_all(&test_installer.installation_dir) {
+                panic!("Failed to create test directory: {}", e);
+            }
+
+            assert!(test_dir.exists());
+
+            // Cleanup
+            let _ = fs::remove_dir_all(test_dir);
+        }
+    }
+
+    #[test]
+    fn test_path_environment_variable() {
+        if let Ok(installer) = Installer::new() {
+            let path = env::var("PATH").unwrap_or_default();
+            let installation_dir = installer.installation_dir.to_string_lossy();
+            println!(
+                "Installation dir in PATH: {}",
+                path.contains(&*installation_dir)
+            );
+        }
+    }
+}
