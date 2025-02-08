@@ -1,7 +1,11 @@
+use serde::ser::Error;
 use std::env;
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::string::FromUtf8Error;
 
 // Constants
 const DEFAULT_RUST_VERSION: &str = "1.70";
@@ -20,24 +24,139 @@ trait WindowsBuilder: Builder {
 
 // Error handling
 #[derive(Debug)]
-enum BuildError {
-    GoBuildFailed(String),
-    DumpbinFailed(String),
-    DlltoolFailed(String),
-    FileOperationFailed(String),
-    MetadataError(String),
-    ConfigError(String),
+pub enum BuildError {
+    GoBuild {
+        cmd: String,
+        source: io::Error,
+    },
+    DumpbinExecution {
+        cmd: String,
+        source: io::Error,
+    },
+    DumpbinFailed {
+        output: Vec<u8>,
+    },
+    DlltoolExecution {
+        cmd: String,
+        source: io::Error,
+    },
+    DlltoolFailed {
+        output: Vec<u8>,
+    },
+    FileOperation {
+        path: String,
+        operation: String,
+        source: io::Error,
+    },
+    MetadataExecution {
+        cmd: String,
+        source: io::Error,
+    },
+    MetadataParsing {
+        source: serde_json::Error,
+    },
+    ConfigParsing {
+        source: toml::de::Error,
+    },
+    Utf8Conversion {
+        source: FromUtf8Error,
+    },
+    EnvVar {
+        var: String,
+        source: std::env::VarError,
+    },
+    BindgenFailed,
 }
 
-impl std::fmt::Display for BuildError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl From<io::Error> for BuildError {
+    fn from(error: io::Error) -> Self {
+        BuildError::FileOperation {
+            path: String::new(),
+            operation: "access".to_string(),
+            source: error,
+        }
+    }
+}
+
+impl From<FromUtf8Error> for BuildError {
+    fn from(error: FromUtf8Error) -> Self {
+        BuildError::Utf8Conversion { source: error }
+    }
+}
+
+impl From<serde_json::Error> for BuildError {
+    fn from(error: serde_json::Error) -> Self {
+        BuildError::MetadataParsing { source: error }
+    }
+}
+
+impl From<toml::de::Error> for BuildError {
+    fn from(error: toml::de::Error) -> Self {
+        BuildError::ConfigParsing { source: error }
+    }
+}
+
+impl fmt::Display for BuildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BuildError::GoBuildFailed(e) => write!(f, "Go build failed: {}", e),
-            BuildError::DumpbinFailed(e) => write!(f, "Dumpbin failed: {}", e),
-            BuildError::DlltoolFailed(e) => write!(f, "Dlltool failed: {}", e),
-            BuildError::FileOperationFailed(e) => write!(f, "File operation failed: {}", e),
-            BuildError::MetadataError(e) => write!(f, "Metadata error: {}", e),
-            BuildError::ConfigError(e) => write!(f, "Config error: {}", e),
+            BuildError::GoBuild { cmd, source } => {
+                write!(
+                    f,
+                    "Failed to execute Go build command '{}': {}",
+                    cmd, source
+                )
+            }
+            BuildError::DumpbinExecution { cmd, source } => {
+                write!(f, "Failed to execute dumpbin command '{}': {}", cmd, source)
+            }
+            BuildError::DumpbinFailed { output } => {
+                write!(
+                    f,
+                    "Dumpbin command failed: {}",
+                    String::from_utf8_lossy(output)
+                )
+            }
+            BuildError::DlltoolExecution { cmd, source } => {
+                write!(f, "Failed to execute dlltool command '{}': {}", cmd, source)
+            }
+            BuildError::DlltoolFailed { output } => {
+                write!(
+                    f,
+                    "Dlltool command failed: {}",
+                    String::from_utf8_lossy(output)
+                )
+            }
+            BuildError::FileOperation {
+                path,
+                operation,
+                source,
+            } => {
+                write!(f, "Failed to {} file '{}': {}", operation, path, source)
+            }
+            BuildError::MetadataExecution { cmd, source } => {
+                write!(
+                    f,
+                    "Failed to execute cargo metadata command '{}': {}",
+                    cmd, source
+                )
+            }
+            BuildError::MetadataParsing { source } => {
+                write!(f, "Failed to parse cargo metadata: {}", source)
+            }
+            BuildError::ConfigParsing { source } => {
+                write!(f, "Failed to parse Cargo.toml: {}", source)
+            }
+            BuildError::Utf8Conversion { source } => {
+                write!(f, "Failed to convert output to UTF-8: {}", source)
+            }
+            BuildError::EnvVar { var, source } => {
+                write!(
+                    f,
+                    "Failed to read environment variable '{}': {}",
+                    var, source
+                )
+            }
+            BuildError::BindgenFailed => todo!(),
         }
     }
 }
@@ -47,7 +166,7 @@ impl std::error::Error for BuildError {}
 // Add this function to the file
 fn generate_def_content(dumpbin_output: &[u8]) -> Result<String, BuildError> {
     let dumpbin_stdout = String::from_utf8(dumpbin_output.to_vec())
-        .map_err(|e| BuildError::DumpbinFailed(e.to_string()))?;
+        .map_err(|e| BuildError::Utf8Conversion { source: e })?;
 
     let mut def_content = String::from("EXPORTS\n");
 
@@ -71,12 +190,13 @@ fn extract_function_name<'a>(parts: &'a [&'a str]) -> Option<&'a str> {
 
 // Also add this missing function for parsing cargo metadata
 fn parse_cargo_metadata(metadata_output: &[u8]) -> Result<PathBuf, BuildError> {
-    let metadata: serde_json::Value = serde_json::from_slice(metadata_output)
-        .map_err(|e| BuildError::MetadataError(e.to_string()))?;
-
-    let target_directory = metadata["target_directory"]
-        .as_str()
-        .ok_or_else(|| BuildError::MetadataError("target_directory not found".to_string()))?;
+    let metadata: serde_json::Value = serde_json::from_slice(metadata_output)?;
+    let target_directory =
+        metadata["target_directory"]
+            .as_str()
+            .ok_or_else(|| BuildError::MetadataParsing {
+                source: serde_json::Error::custom("target_directory not found"),
+            })?;
 
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
@@ -127,12 +247,19 @@ impl Builder for GoLibBuilder {
                 &self.config.go_source,
             ])
             .output()
-            .map_err(|e| BuildError::GoBuildFailed(e.to_string()))?;
+            .map_err(|e| BuildError::GoBuild {
+                cmd: "go build".to_string(),
+                source: e,
+            })?;
 
         if !output.status.success() {
-            return Err(BuildError::GoBuildFailed(
-                String::from_utf8_lossy(&output.stderr).to_string(),
-            ));
+            return Err(BuildError::GoBuild {
+                cmd: "go build".to_string(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    String::from_utf8_lossy(&output.stderr).to_string(),
+                ),
+            });
         }
 
         Ok(())
@@ -165,17 +292,23 @@ impl WindowsBuilder for WindowsGoLibBuilder {
         let dumpbin_output = Command::new("dumpbin")
             .args(["/exports", &self.config.dll_file])
             .output()
-            .map_err(|e| BuildError::DumpbinFailed(e.to_string()))?;
+            .map_err(|e| BuildError::DumpbinExecution {
+                cmd: "dumpbin".to_string(),
+                source: e,
+            })?;
 
         if !dumpbin_output.status.success() {
-            return Err(BuildError::DumpbinFailed(
-                String::from_utf8_lossy(&dumpbin_output.stderr).to_string(),
-            ));
+            return Err(BuildError::DumpbinFailed {
+                output: dumpbin_output.stderr,
+            });
         }
 
         let def_content = generate_def_content(&dumpbin_output.stdout)?;
-        fs::write(&def_file, def_content)
-            .map_err(|e| BuildError::FileOperationFailed(e.to_string()))?;
+        fs::write(&def_file, def_content).map_err(|e| BuildError::FileOperation {
+            path: self.config.dll_file.clone(),
+            operation: "copy".to_string(),
+            source: e,
+        })?;
 
         Ok(())
     }
@@ -194,12 +327,15 @@ impl WindowsBuilder for WindowsGoLibBuilder {
                 &lib_file,
             ])
             .output()
-            .map_err(|e| BuildError::DlltoolFailed(e.to_string()))?;
+            .map_err(|e| BuildError::DlltoolExecution {
+                cmd: "dlltool".to_string(),
+                source: e,
+            })?;
 
         if !dlltool_output.status.success() {
-            return Err(BuildError::DlltoolFailed(
-                String::from_utf8_lossy(&dlltool_output.stderr).to_string(),
-            ));
+            return Err(BuildError::DlltoolFailed {
+                output: dlltool_output.stderr,
+            });
         }
 
         Ok(())
@@ -207,8 +343,13 @@ impl WindowsBuilder for WindowsGoLibBuilder {
 
     fn copy_dll(&self) -> Result<(), BuildError> {
         let target_dll_path = self.config.target_dir.join("go_lib.dll");
-        fs::copy(&self.config.dll_file, target_dll_path)
-            .map_err(|e| BuildError::FileOperationFailed(e.to_string()))?;
+        fs::copy(&self.config.dll_file, target_dll_path).map_err(|e| {
+            BuildError::FileOperation {
+                path: self.config.dll_file.clone(),
+                operation: "copy".to_string(),
+                source: e,
+            }
+        })?;
         Ok(())
     }
 }
@@ -252,11 +393,15 @@ impl BuildOrchestrator {
             .rust_target(self.config.rust_version.parse().unwrap())
             .header(&self.config.header_file)
             .generate()
-            .map_err(|_| BuildError::ConfigError("Failed to generate bindings".to_string()))?;
+            .map_err(|_| BuildError::BindgenFailed)?;
 
         bindings
-            .write_to_file(bindings_path)
-            .map_err(|e| BuildError::FileOperationFailed(e.to_string()))?;
+            .write_to_file(bindings_path.as_path())
+            .map_err(|e| BuildError::FileOperation {
+                path: bindings_path.to_string_lossy().to_string(),
+                operation: "write".to_string(),
+                source: e,
+            })?;
 
         Ok(())
     }
@@ -278,24 +423,33 @@ fn get_target_directory() -> Result<PathBuf, BuildError> {
     let output = Command::new("cargo")
         .args(["metadata", "--format-version=1", "--no-deps"])
         .output()
-        .map_err(|e| BuildError::MetadataError(e.to_string()))?;
+        .map_err(|e| BuildError::MetadataExecution {
+            cmd: "cargo metadata".to_string(),
+            source: e,
+        })?;
 
     if !output.status.success() {
-        return Err(BuildError::MetadataError(
-            String::from_utf8_lossy(&output.stderr).to_string(),
-        ));
+        return Err(BuildError::MetadataExecution {
+            cmd: "cargo metadata".to_string(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ),
+        });
     }
 
     // Parse metadata and return target directory
     parse_cargo_metadata(&output.stdout)
 }
 
-fn get_rust_version() -> Result<String, BuildError> {
-    let cargo_toml =
-        fs::read_to_string("Cargo.toml").map_err(|e| BuildError::ConfigError(e.to_string()))?;
+pub fn get_rust_version() -> Result<String, BuildError> {
+    let cargo_toml = fs::read_to_string("Cargo.toml").map_err(|e| BuildError::FileOperation {
+        path: "Cargo.toml".to_string(),
+        operation: "read".to_string(),
+        source: e,
+    })?;
 
-    let parsed_toml: toml::Value =
-        toml::from_str(&cargo_toml).map_err(|e| BuildError::ConfigError(e.to_string()))?;
+    let parsed_toml: toml::Value = toml::from_str(&cargo_toml)?;
 
     Ok(parsed_toml
         .get("package")

@@ -219,6 +219,7 @@ version = "0.1.0"
 dependencies = [
  "bindgen",
  "libc",
+ "serde",
  "serde_json",
  "toml",
 ]
