@@ -8,7 +8,10 @@ rust-version = "1.70"
 
 [features]
 default = ["auto-install"]
-auto-install = ["dirs"]    # Feature for automatic DLL installation
+auto-install = ["dirs"]                           # Feature for automatic DLL installation
+metrics = ["metrics-runtime"]
+tracing = ["opentelemetry", "tracing-subscriber"]
+auto-cleanup = []
 
 [[bin]]
 name = "rust_go_ffi"
@@ -22,6 +25,17 @@ crate-type = ["rlib"]
 colored = "3.0.0"
 dirs = { version = "6.0.0", optional = true }
 libc = "0.2"
+log = "0.4"
+env_logger = "0.11.6"
+lazy_static = "1.4"
+parking_lot = "0.12"
+semver = "1.0"
+thiserror = "2.0.11"
+anyhow = "1.0"
+metrics-runtime = { version = "0.13", optional = true }
+opentelemetry = { version = "0.27.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
+test-log = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["libloaderapi"] }
@@ -31,6 +45,13 @@ bindgen = "0.71.1"
 serde_json = "1.0"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+mockall = "0.13.1"
+temp-env = "0.3"
+test-log = "0.2"
+env_logger = "0.11.6"
 
 [[example]]
 name = "basic_usage"
@@ -47,3 +68,7 @@ debug = false
 strip = true
 lto = true
 codegen-units = 1
+
+[[bench]]
+name = "ffi_benchmarks"
+harness = false
