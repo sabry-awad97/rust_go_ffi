@@ -10,6 +10,9 @@ use std::string::FromUtf8Error;
 // Constants
 const DEFAULT_RUST_VERSION: &str = "1.70";
 const GO_LIB_DIR: &str = "go_lib";
+const GO_SOURCE: &str = "go_lib/go_lib.go";
+const DLL_FILE: &str = "go_lib/go_lib.dll";
+const HEADER_FILE: &str = "go_lib/go_lib.h";
 
 // Traits for different build steps
 trait Builder {
@@ -216,9 +219,9 @@ struct BuildConfig {
 impl BuildConfig {
     fn new() -> Result<Self, BuildError> {
         Ok(Self {
-            go_source: format!("{}/go_lib.go", GO_LIB_DIR),
-            dll_file: format!("{}/go_lib.dll", GO_LIB_DIR),
-            header_file: format!("{}/go_lib.h", GO_LIB_DIR),
+            go_source: GO_SOURCE.to_string(),
+            dll_file: DLL_FILE.to_string(),
+            header_file: HEADER_FILE.to_string(),
             target_dir: get_target_directory()?,
             rust_version: get_rust_version()?,
         })
@@ -408,9 +411,9 @@ impl BuildOrchestrator {
 
     fn set_cargo_config(&self) {
         println!("cargo:rustc-link-search=native={}", GO_LIB_DIR);
-        println!("cargo:rustc-link-lib=dylib=go_lib");
-        println!("cargo:rerun-if-changed={}/go_lib.h", GO_LIB_DIR);
-        println!("cargo:rerun-if-changed={}/go_lib.go", GO_LIB_DIR);
+        println!("cargo:rustc-link-lib=dylib={}", GO_LIB_DIR);
+        println!("cargo:rerun-if-changed={}", self.config.header_file);
+        println!("cargo:rerun-if-changed={}", self.config.go_source);
     }
 }
 
@@ -461,8 +464,21 @@ pub fn get_rust_version() -> Result<String, BuildError> {
 
 // Main function
 fn main() {
+    println!("Starting Rust-Go binding build process...");
+
     let orchestrator = BuildOrchestrator::new().expect("Failed to create build orchestrator");
+
+    println!("Building Go shared library...");
     if let Err(e) = orchestrator.run() {
         panic!("Build failed: {:?}", e);
+    }
+    println!("Build completed successfully!");
+
+    // Verify DLL path
+    let dll_path = Path::new(DLL_FILE);
+    if dll_path.exists() {
+        println!("DLL file found at: {:?}", dll_path);
+    } else {
+        panic!("DLL file not found at: {:?}", dll_path);
     }
 }

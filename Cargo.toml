@@ -2,16 +2,39 @@
 name = "rust_go_ffi"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70" # Specify your minimum supported Rust version
+description = "Rust bindings for Go FFI"
+license = "MIT"
+rust-version = "1.70"
+
+[features]
+default = ["auto-install"]
+auto-install = ["dirs"]    # Feature for automatic DLL installation
+
+[[bin]]
+name = "rust_go_ffi"
+path = "src/main.rs"
+
+[lib]
+name = "rust_go_ffi"
+crate-type = ["rlib"]
 
 [dependencies]
+colored = "3.0.0"
+dirs = { version = "6.0.0", optional = true }
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["libloaderapi"] }
 
 [build-dependencies]
 bindgen = "0.71.1"
 serde_json = "1.0"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+
+[[example]]
+name = "basic_usage"
+path = "examples/basic_usage.rs"
 
 # Optional: Configuration for development and release profiles
 [profile.dev]
