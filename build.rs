@@ -485,8 +485,7 @@ fn copy_with_retry(src: &Path, dst: &Path, retries: u32) -> io::Result<()> {
 }
 
 fn build_go_lib() -> Result<(), BuildError> {
-    println!("Starting Rust-Go binding build process...");
-    println!("Building Go shared library...");
+    println!("Starting Go library initialization...");
 
     // Create go_lib directory if it doesn't exist
     fs::create_dir_all("go_lib").map_err(|e| BuildError::FileOperation {
@@ -494,6 +493,69 @@ fn build_go_lib() -> Result<(), BuildError> {
         operation: "create_dir".to_string(),
         source: e,
     })?;
+
+    // Check if go.mod already exists
+    if !Path::new("go_lib/go.mod").exists() {
+        // Initialize Go module
+        let init_output = Command::new("go")
+            .args(["mod", "init", "go_lib"])
+            .current_dir("go_lib")
+            .output()
+            .map_err(|e| BuildError::GoBuild {
+                cmd: "go mod init".to_string(),
+                source: e,
+            })?;
+
+        if !init_output.status.success() {
+            return Err(BuildError::GoBuild {
+                cmd: "go mod init".to_string(),
+                source: io::Error::new(
+                    io::ErrorKind::Other,
+                    String::from_utf8_lossy(&init_output.stderr).to_string(),
+                ),
+            });
+        }
+
+        // Add required dependency
+        let get_output = Command::new("go")
+            .args(["get", "modernc.org/sqlite@latest"])
+            .current_dir("go_lib")
+            .output()
+            .map_err(|e| BuildError::GoBuild {
+                cmd: "go get".to_string(),
+                source: e,
+            })?;
+
+        if !get_output.status.success() {
+            return Err(BuildError::GoBuild {
+                cmd: "go get".to_string(),
+                source: io::Error::new(
+                    io::ErrorKind::Other,
+                    String::from_utf8_lossy(&get_output.stderr).to_string(),
+                ),
+            });
+        }
+    }
+
+    // Download dependencies
+    let tidy_output = Command::new("go")
+        .args(["mod", "tidy"])
+        .current_dir("go_lib")
+        .output()
+        .map_err(|e| BuildError::GoBuild {
+            cmd: "go mod tidy".to_string(),
+            source: e,
+        })?;
+
+    if !tidy_output.status.success() {
+        return Err(BuildError::GoBuild {
+            cmd: "go mod tidy".to_string(),
+            source: io::Error::new(
+                io::ErrorKind::Other,
+                String::from_utf8_lossy(&tidy_output.stderr).to_string(),
+            ),
+        });
+    }
 
     // Clean up existing DLL if possible
     let dll_path = PathBuf::from("go_lib/go_lib.dll");
@@ -542,6 +604,9 @@ fn build_go_lib() -> Result<(), BuildError> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Rust-Go binding build process...");
 
+    // First, build Go library with retry mechanism
+    build_go_lib()?;
+
     let orchestrator = BuildOrchestrator::new().expect("Failed to create build orchestrator");
 
     println!("Building Go shared library...");
@@ -557,9 +622,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         panic!("DLL file not found at: {:?}", dll_path);
     }
-
-    // Build Go library with retry mechanism
-    build_go_lib()?;
 
     // Generate bindings
     orchestrator.generate_bindings()?;

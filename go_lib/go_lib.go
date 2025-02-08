@@ -1,7 +1,9 @@
 package main
 
 import "C"
-import "fmt"
+import (
+	"fmt"
+)
 
 //export GetDLLVersion
 func GetDLLVersion() C.longlong {
