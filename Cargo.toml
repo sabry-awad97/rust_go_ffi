@@ -2,9 +2,24 @@
 name = "rust_go_ffi"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70"  # Specify your minimum supported Rust version
 
 [dependencies]
 libc = "0.2"
 
 [build-dependencies]
 bindgen = "0.71.1"
+serde_json = "1.0"
+toml = "0.8"
+
+# Optional: Configuration for development and release profiles
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+debug = false
+strip = true
+lto = true
+codegen-units = 1
