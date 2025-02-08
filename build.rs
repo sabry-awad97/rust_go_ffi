@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::string::FromUtf8Error;
+use std::{thread, time::Duration};
 
 // Constants
 const DEFAULT_RUST_VERSION: &str = "1.70";
@@ -346,13 +347,13 @@ impl WindowsBuilder for WindowsGoLibBuilder {
 
     fn copy_dll(&self) -> Result<(), BuildError> {
         let target_dll_path = self.config.target_dir.join("go_lib.dll");
-        fs::copy(&self.config.dll_file, target_dll_path).map_err(|e| {
-            BuildError::FileOperation {
+        copy_with_retry(&PathBuf::from(&self.config.dll_file), &target_dll_path, 5).map_err(
+            |e| BuildError::FileOperation {
                 path: self.config.dll_file.clone(),
                 operation: "copy".to_string(),
                 source: e,
-            }
-        })?;
+            },
+        )?;
         Ok(())
     }
 }
@@ -462,8 +463,83 @@ pub fn get_rust_version() -> Result<String, BuildError> {
         .to_string())
 }
 
+fn copy_with_retry(src: &Path, dst: &Path, retries: u32) -> io::Result<()> {
+    for attempt in 1..=retries {
+        match fs::copy(src, dst) {
+            Ok(_) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied && attempt < retries => {
+                println!(
+                    "File locked, retrying in 1 second (attempt {}/{})",
+                    attempt, retries
+                );
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Other,
+        "Failed to copy file after all retries",
+    ))
+}
+
+fn build_go_lib() -> Result<(), BuildError> {
+    println!("Starting Rust-Go binding build process...");
+    println!("Building Go shared library...");
+
+    // Create go_lib directory if it doesn't exist
+    fs::create_dir_all("go_lib").map_err(|e| BuildError::FileOperation {
+        path: "go_lib".to_string(),
+        operation: "create_dir".to_string(),
+        source: e,
+    })?;
+
+    // Clean up existing DLL if possible
+    let dll_path = PathBuf::from("go_lib/go_lib.dll");
+    if dll_path.exists() {
+        if let Err(e) = fs::remove_file(&dll_path) {
+            println!("Warning: Could not remove existing DLL: {}", e);
+        }
+    }
+
+    // Build Go code
+    let output = Command::new("go")
+        .args(["build", "-buildmode=c-shared", "-o", "go_lib.dll"])
+        .current_dir("go_lib")
+        .output()
+        .map_err(|e| BuildError::GoBuild {
+            cmd: "go build".to_string(),
+            source: e,
+        })?;
+
+    if !output.status.success() {
+        return Err(BuildError::GoBuild {
+            cmd: "go build".to_string(),
+            source: io::Error::new(
+                io::ErrorKind::Other,
+                String::from_utf8_lossy(&output.stderr).to_string(),
+            ),
+        });
+    }
+
+    // Copy with retry mechanism
+    copy_with_retry(
+        &PathBuf::from("go_lib/go_lib.dll"),
+        &PathBuf::from("target/debug/go_lib.dll"),
+        5,
+    )
+    .map_err(|e| BuildError::FileOperation {
+        path: "go_lib/go_lib.dll".to_string(),
+        operation: "copy".to_string(),
+        source: e,
+    })?;
+
+    Ok(())
+}
+
 // Main function
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting Rust-Go binding build process...");
 
     let orchestrator = BuildOrchestrator::new().expect("Failed to create build orchestrator");
@@ -481,4 +557,12 @@ fn main() {
     } else {
         panic!("DLL file not found at: {:?}", dll_path);
     }
+
+    // Build Go library with retry mechanism
+    build_go_lib()?;
+
+    // Generate bindings
+    orchestrator.generate_bindings()?;
+
+    Ok(())
 }

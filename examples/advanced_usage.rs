@@ -40,6 +40,19 @@ fn run_ffi_operations() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(feature = "metrics")]
+fn print_metrics() {
+    // Wait a moment for metrics to be collected
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Prometheus metrics are exposed via HTTP endpoint
+    println!("\nMetrics are available at: http://localhost:9000/metrics");
+    println!("Use curl http://localhost:9000/metrics to view them");
+
+    // Keep the program running for a moment so metrics can be accessed
+    std::thread::sleep(std::time::Duration::from_secs(5));
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
     info!("Starting advanced FFI example");
@@ -50,5 +63,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     info!("FFI operations completed successfully");
+
+    #[cfg(feature = "metrics")]
+    print_metrics();
+
     Ok(())
 }
